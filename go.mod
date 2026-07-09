@@ -4,7 +4,7 @@ go 1.26
 
 require (
 	github.com/dal-go/dalgo v0.62.10
-	github.com/dal-go/dalgo2sql v0.9.0
+	github.com/dal-go/dalgo2sql v0.9.2
 	github.com/go-sql-driver/mysql v1.9.3
 )
 
