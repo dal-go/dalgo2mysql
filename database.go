@@ -78,6 +78,18 @@ func NewDatabaseWithOptions(dsn string, schema dal.Schema, opts dalgo2sql.DbOpti
 	// dalgo2sql's DML and dal's structured-query rendering emit match the
 	// backtick-quoted DDL this package produces without any case folding.
 
+	// dalgo2sql cannot recognize a go-sql-driver/mysql duplicate-key error
+	// on its own (see dalgo2sql.DbOptions.IsAlreadyExists) — that is
+	// exactly what this package's IsAlreadyExists (errors.go) exists to
+	// answer. Default it in whenever the caller hasn't already supplied
+	// their own hook, so every dalgo2mysql-opened database classifies
+	// duplicate-key inserts without extra setup; a caller who explicitly
+	// set opts.IsAlreadyExists (e.g. to widen, narrow, or disable
+	// detection) keeps that choice.
+	if opts.IsAlreadyExists == nil {
+		opts.IsAlreadyExists = IsAlreadyExists
+	}
+
 	sqlDB, err := sql.Open("mysql", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("dalgo2mysql: sql.Open(%q): %w", dsn, err)
