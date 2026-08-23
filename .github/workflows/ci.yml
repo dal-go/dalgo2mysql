@@ -18,3 +18,40 @@ jobs:
     with:
       cgo_enabled: false
       disable-version-bumping: true
+
+  # Runs the shared dalgotest conformance suite against a real MySQL.
+  #
+  # This lives here rather than in strongo/cicd on purpose: service containers
+  # cannot be passed into a reusable workflow by its caller, and `services:`
+  # cannot be made conditional — putting MySQL there would impose a database
+  # container on every fleet repo that uses the shared workflow.
+  #
+  # No test code needed changing: the DB-backed tests already skip unless
+  # DALGO2MYSQL_TEST_DSN is set, and TestConformance creates and drops its own
+  # table, so a running server and a DSN are the whole requirement.
+  integration:
+    name: Conformance (MySQL)
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8
+        env:
+          MYSQL_ROOT_PASSWORD: mysql
+          MYSQL_DATABASE: dalgo_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -uroot -pmysql --silent"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+          --health-start-period 30s
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: go test (with a live MySQL)
+        run: go test -race ./...
+        env:
+          DALGO2MYSQL_TEST_DSN: root:mysql@tcp(127.0.0.1:3306)/dalgo_test?parseTime=true&multiStatements=true
