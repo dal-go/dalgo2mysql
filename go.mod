@@ -1,6 +1,6 @@
 module github.com/dal-go/dalgo2mysql
 
-go 1.26
+go 1.27.0
 
 require (
 	github.com/dal-go/dalgo v0.66.1
