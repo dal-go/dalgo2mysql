@@ -18,4 +18,5 @@ require (
 	github.com/georgysavva/scany/v2 v2.1.4 // indirect
 	github.com/mschoch/smat v0.2.0 // indirect
 	github.com/strongo/random v0.0.2 // indirect
+	golang.org/x/sys v0.47.0 // indirect
 )
