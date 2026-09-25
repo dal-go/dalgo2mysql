@@ -1,0 +1,46 @@
+package dalgo2mysql
+
+import (
+	"context"
+	"testing"
+
+	"github.com/dal-go/dalgo/dal"
+	"github.com/dal-go/dalgo/dbschema"
+)
+
+func TestDescribeCollection_ForeignKeys(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+	parent := uniqueTable(t, "fk_parent")
+	child := uniqueTable(t, "fk_child")
+	dropTable(t, db, child)
+	dropTable(t, db, parent)
+	defer dropTable(t, db, parent)
+	defer dropTable(t, db, child)
+	for _, statement := range []string{
+		`CREATE TABLE ` + quoteIdent(parent) + ` (a INT NOT NULL, b INT NOT NULL, PRIMARY KEY (a,b))`,
+		`CREATE TABLE ` + quoteIdent(child) + ` (id INT PRIMARY KEY, a INT, b INT,
+		 FOREIGN KEY (a,b) REFERENCES ` + quoteIdent(parent) + `(a,b)
+		 ON DELETE CASCADE ON UPDATE RESTRICT)`,
+	} {
+		if _, err := db.sqlDB.ExecContext(ctx, statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ref := dal.NewRootCollectionRef(child, "")
+	def, err := db.DescribeCollection(ctx, &ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(def.ForeignKeys) != 1 {
+		t.Fatalf("foreign keys: %+v", def.ForeignKeys)
+	}
+	fk := def.ForeignKeys[0]
+	if fk.ReferencedCollection != parent || fk.ReferencedNamespace != "" ||
+		len(fk.Fields) != 2 || fk.Fields[0] != "a" || fk.Fields[1] != "b" ||
+		len(fk.ReferencedFields) != 2 || fk.ReferencedFields[0] != "a" || fk.ReferencedFields[1] != "b" ||
+		fk.OnDelete != "CASCADE" || fk.OnUpdate != "RESTRICT" ||
+		fk.Enforcement != dbschema.ForeignKeyEnforcementEnabled {
+		t.Fatalf("foreign key metadata: %+v", fk)
+	}
+}
