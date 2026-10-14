@@ -2,6 +2,8 @@ package dalgo2mysql
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"testing"
@@ -78,6 +80,7 @@ func dropTable(t *testing.T, db *Database, table string) {
 }
 
 func TestNewDatabase_Connects(t *testing.T) {
+	t.Parallel()
 	dsn := testDSN(t)
 	db, err := NewDatabase(dsn)
 	if err != nil {
@@ -90,6 +93,7 @@ func TestNewDatabase_Connects(t *testing.T) {
 }
 
 func TestNewDatabase_RejectsBadDSN(t *testing.T) {
+	t.Parallel()
 	db, err := NewDatabase("nobody:wrong@tcp(127.0.0.1:13306)/noexist_db_xyz?parseTime=true")
 	if err == nil {
 		_ = db.Close()
@@ -100,16 +104,81 @@ func TestNewDatabase_RejectsBadDSN(t *testing.T) {
 	}
 }
 
+// Not parallel: mutates package-level sqlOpen seam.
+func TestNewDatabase_Unit(t *testing.T) {
+	orig := sqlOpen
+	t.Cleanup(func() { sqlOpen = orig })
+
+	t.Run("success_and_close", func(t *testing.T) {
+		sqlOpen = func(dsn string) (*sql.DB, error) {
+			return sql.OpenDB(&mockConnector{}), nil
+		}
+		db, err := NewDatabase("mock-dsn")
+		if err != nil {
+			t.Fatalf("NewDatabase: %v", err)
+		}
+		if db == nil {
+			t.Fatal("NewDatabase returned nil")
+		}
+		if err := db.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	})
+
+	t.Run("open_error", func(t *testing.T) {
+		sqlOpen = func(dsn string) (*sql.DB, error) {
+			return nil, errors.New("open failed")
+		}
+		db, err := NewDatabaseWithOptions("bad", dal.NewSchema(nil, nil), dalgo2sql.DbOptions{})
+		if err == nil {
+			t.Fatal("expected error when sqlOpen fails")
+		}
+		if db != nil {
+			t.Errorf("expected nil db, got %v", db)
+		}
+	})
+}
+
+func TestDatabase_CloseNil(t *testing.T) {
+	t.Parallel()
+	var d Database
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close on nil sqlDB returned error: %v", err)
+	}
+}
+
 func TestDatabase_SupportsConcurrentConnections_True(t *testing.T) {
-	db := openTestDB(t)
+	t.Parallel()
+	_, db := newMockDB(t, nil)
 	if !db.SupportsConcurrentConnections() {
 		t.Error("expected SupportsConcurrentConnections() == true for MySQL, got false")
 	}
 }
 
 func TestDatabase_SupportsTransactionalDDL_False(t *testing.T) {
-	db := openTestDB(t)
+	t.Parallel()
+	_, db := newMockDB(t, nil)
 	if db.SupportsTransactionalDDL() {
 		t.Error("expected SupportsTransactionalDDL() == false for MySQL, got true")
+	}
+}
+
+func TestDatabase_DelegatedMethods(t *testing.T) {
+	t.Parallel()
+	_, db := newMockDBWithOpts(t, nil, dalgo2sql.DbOptions{
+		ID: "test-db-id",
+	})
+	if got := db.ID(); got != "test-db-id" {
+		t.Errorf("ID() = %q, want %q", got, "test-db-id")
+	}
+	adapter := db.Adapter()
+	if adapter.Name() != "dalgo2mysql" {
+		t.Errorf("Adapter().Name() = %q, want dalgo2mysql", adapter.Name())
+	}
+	if adapter.Version() != Version {
+		t.Errorf("Adapter().Version() = %q, want %q", adapter.Version(), Version)
+	}
+	if gotSchema := db.Schema(); gotSchema == nil {
+		t.Error("Schema() returned nil")
 	}
 }

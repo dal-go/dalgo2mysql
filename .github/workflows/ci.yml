@@ -17,6 +17,8 @@ jobs:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     with:
       cgo_enabled: false
+      code_coverage: true
+      min_test_coverage_percent: 100
       disable-version-bumping: true
 
   # Runs the shared dalgotest conformance suite against a real MySQL.
@@ -58,7 +60,7 @@ jobs:
         # prevent. Run verbose and assert on the result line.
         run: |
           set -o pipefail
-          go test -race -v ./... 2>&1 | tee /tmp/gotest.log
+          go test -race -v -covermode=atomic -coverprofile=cover.out ./... 2>&1 | tee /tmp/gotest.log
           if grep -qE '^\s*--- SKIP: TestConformance' /tmp/gotest.log; then
             echo "::error::TestConformance SKIPPED - the DSN did not reach the tests"
             exit 1
@@ -67,5 +69,6 @@ jobs:
             echo "::error::TestConformance did not run"
             exit 1
           fi
+          awk 'NR > 1 && $3 == 0 { uncovered += $2; print } END { if (uncovered > 0) { print "::error::" uncovered " uncovered statements"; exit 1 } }' cover.out
         env:
           DALGO2MYSQL_TEST_DSN: root:mysql@tcp(127.0.0.1:3306)/dalgo_test?parseTime=true&multiStatements=true

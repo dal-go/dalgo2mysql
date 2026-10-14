@@ -2,6 +2,9 @@ package dalgo2mysql
 
 import (
 	"context"
+	"database/sql/driver"
+	"errors"
+	"strings"
 	"testing"
 
 	"github.com/dal-go/dalgo/dal"
@@ -10,6 +13,7 @@ import (
 )
 
 func TestCreateCollection_HappyPath(t *testing.T) {
+	t.Parallel()
 	db := openTestDB(t)
 	ctx := context.Background()
 	tbl := uniqueTable(t, "users")
@@ -55,6 +59,7 @@ func TestCreateCollection_HappyPath(t *testing.T) {
 }
 
 func TestCreateCollection_IfNotExists(t *testing.T) {
+	t.Parallel()
 	db := openTestDB(t)
 	ctx := context.Background()
 	tbl := uniqueTable(t, "ine")
@@ -75,6 +80,7 @@ func TestCreateCollection_IfNotExists(t *testing.T) {
 }
 
 func TestDropCollection(t *testing.T) {
+	t.Parallel()
 	db := openTestDB(t)
 	ctx := context.Background()
 	tbl := uniqueTable(t, "drop")
@@ -105,6 +111,7 @@ func TestDropCollection(t *testing.T) {
 }
 
 func TestAlterCollection_AddDropRenameField(t *testing.T) {
+	t.Parallel()
 	db := openTestDB(t)
 	ctx := context.Background()
 	tbl := uniqueTable(t, "alter")
@@ -150,6 +157,7 @@ func TestAlterCollection_AddDropRenameField(t *testing.T) {
 }
 
 func TestAlterCollection_ModifyField(t *testing.T) {
+	t.Parallel()
 	db := openTestDB(t)
 	ctx := context.Background()
 	tbl := uniqueTable(t, "mod")
@@ -190,6 +198,7 @@ func TestAlterCollection_ModifyField(t *testing.T) {
 }
 
 func TestAlterCollection_AddDropIndex(t *testing.T) {
+	t.Parallel()
 	db := openTestDB(t)
 	ctx := context.Background()
 	tbl := uniqueTable(t, "aidx")
@@ -221,4 +230,161 @@ func TestAlterCollection_AddDropIndex(t *testing.T) {
 			t.Errorf("index %q still present after drop", idxName)
 		}
 	}
+}
+
+func TestSchemaModifier_Unit(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	t.Run("create_collection_success_and_default_idx_collection", func(t *testing.T) {
+		t.Parallel()
+		_, db := newMockDB(t, nil)
+		c := dbschema.CollectionDef{
+			Name:       "users",
+			Fields:     []dbschema.FieldDef{{Name: "id", Type: dbschema.String}},
+			PrimaryKey: []dal.FieldName{"id"},
+			Indexes: []dbschema.IndexDef{
+				{Name: "ix_id", Collection: "", Fields: []dal.FieldName{"id"}},
+			},
+		}
+		if err := db.CreateCollection(ctx, c, ddl.IfNotExists()); err != nil {
+			t.Fatalf("CreateCollection: %v", err)
+		}
+	})
+
+	t.Run("create_collection_invalid_table", func(t *testing.T) {
+		t.Parallel()
+		_, db := newMockDB(t, nil)
+		if err := db.CreateCollection(ctx, dbschema.CollectionDef{Name: ""}); err == nil {
+			t.Fatal("expected error")
+		}
+	})
+
+	t.Run("create_collection_invalid_index", func(t *testing.T) {
+		t.Parallel()
+		_, db := newMockDB(t, nil)
+		c := dbschema.CollectionDef{
+			Name:    "users",
+			Fields:  []dbschema.FieldDef{{Name: "id", Type: dbschema.String}},
+			Indexes: []dbschema.IndexDef{{Name: "", Fields: []dal.FieldName{"id"}}},
+		}
+		if err := db.CreateCollection(ctx, c); err == nil {
+			t.Fatal("expected error")
+		}
+	})
+
+	t.Run("create_collection_exec_table_error", func(t *testing.T) {
+		t.Parallel()
+		_, db := newMockDB(t, &driverHooks{
+			execHook: func(ctx context.Context, query string, args []driver.NamedValue) (driver.Result, error, bool) {
+				return nil, errors.New("create table failed"), true
+			},
+		})
+		c := dbschema.CollectionDef{
+			Name:   "users",
+			Fields: []dbschema.FieldDef{{Name: "id", Type: dbschema.String}},
+		}
+		if err := db.CreateCollection(ctx, c); err == nil {
+			t.Fatal("expected error")
+		}
+	})
+
+	t.Run("create_collection_exec_index_error", func(t *testing.T) {
+		t.Parallel()
+		_, db := newMockDB(t, &driverHooks{
+			execHook: func(ctx context.Context, query string, args []driver.NamedValue) (driver.Result, error, bool) {
+				if strings.HasPrefix(query, "CREATE INDEX") {
+					return nil, errors.New("create index failed"), true
+				}
+				return driver.RowsAffected(0), nil, true
+			},
+		})
+		c := dbschema.CollectionDef{
+			Name:    "users",
+			Fields:  []dbschema.FieldDef{{Name: "id", Type: dbschema.String}},
+			Indexes: []dbschema.IndexDef{{Name: "ix_id", Fields: []dal.FieldName{"id"}}},
+		}
+		if err := db.CreateCollection(ctx, c); err == nil {
+			t.Fatal("expected error")
+		}
+	})
+
+	t.Run("drop_collection_success_and_error", func(t *testing.T) {
+		t.Parallel()
+		_, db := newMockDB(t, nil)
+		if err := db.DropCollection(ctx, "users", ddl.IfExists()); err != nil {
+			t.Fatalf("DropCollection: %v", err)
+		}
+
+		_, errDB := newMockDB(t, &driverHooks{
+			execHook: func(ctx context.Context, query string, args []driver.NamedValue) (driver.Result, error, bool) {
+				return nil, errors.New("drop failed"), true
+			},
+		})
+		if err := errDB.DropCollection(ctx, "users"); err == nil {
+			t.Fatal("expected error")
+		}
+	})
+
+	t.Run("alter_collection_happy_path_all_ops", func(t *testing.T) {
+		t.Parallel()
+		_, db := newMockDB(t, nil)
+		err := db.AlterCollection(ctx, "users",
+			ddl.AddField(dbschema.FieldDef{Name: "age", Type: dbschema.Int, Nullable: true}),
+			ddl.RenameField("age", "years"),
+			ddl.DropField("years"),
+			ddl.AddIndex(dbschema.IndexDef{Name: "ix_email", Collection: "", Fields: []dal.FieldName{"email"}}),
+			ddl.DropIndex("ix_email"),
+			ddl.ModifyField("email", dbschema.FieldDef{Name: "email", Type: dbschema.String, Nullable: false}),
+			ddl.ModifyField("email", dbschema.FieldDef{Name: "email", Type: dbschema.String, Nullable: true}),
+		)
+		if err != nil {
+			t.Fatalf("AlterCollection: %v", err)
+		}
+	})
+
+	t.Run("alter_collection_op_errors", func(t *testing.T) {
+		t.Parallel()
+		_, okDB := newMockDB(t, nil)
+		// AddField invalid type
+		if err := okDB.AlterCollection(ctx, "users", ddl.AddField(dbschema.FieldDef{Name: "bad", Type: dbschema.Null})); err == nil {
+			t.Fatal("expected error")
+		}
+		// AddIndex invalid index
+		if err := okDB.AlterCollection(ctx, "users", ddl.AddIndex(dbschema.IndexDef{Name: ""})); err == nil {
+			t.Fatal("expected error")
+		}
+		// ModifyField invalid table name
+		if err := okDB.AlterCollection(ctx, "bad-table", ddl.ModifyField("col", dbschema.FieldDef{Type: dbschema.Int})); err == nil {
+			t.Fatal("expected error")
+		}
+		// ModifyField invalid field name
+		if err := okDB.AlterCollection(ctx, "users", ddl.ModifyField("bad-col", dbschema.FieldDef{Type: dbschema.Int})); err == nil {
+			t.Fatal("expected error")
+		}
+		// ModifyField invalid type
+		if err := okDB.AlterCollection(ctx, "users", ddl.ModifyField("col", dbschema.FieldDef{Type: dbschema.Null})); err == nil {
+			t.Fatal("expected error")
+		}
+
+		// Exec errors for each op
+		_, failDB := newMockDB(t, &driverHooks{
+			execHook: func(ctx context.Context, query string, args []driver.NamedValue) (driver.Result, error, bool) {
+				return nil, errors.New("exec failed"), true
+			},
+		})
+		ops := []ddl.AlterOp{
+			ddl.AddField(dbschema.FieldDef{Name: "age", Type: dbschema.Int}),
+			ddl.DropField("age"),
+			ddl.RenameField("age", "years"),
+			ddl.AddIndex(dbschema.IndexDef{Name: "ix_age", Collection: "users", Fields: []dal.FieldName{"age"}}),
+			ddl.DropIndex("ix_age"),
+			ddl.ModifyField("age", dbschema.FieldDef{Name: "age", Type: dbschema.Int}),
+		}
+		for i, op := range ops {
+			if err := failDB.AlterCollection(ctx, "users", op); err == nil {
+				t.Errorf("op %d: expected exec error, got nil", i)
+			}
+		}
+	})
 }

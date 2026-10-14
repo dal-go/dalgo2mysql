@@ -3,16 +3,26 @@ package dalgo2mysql
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/go-sql-driver/mysql"
 )
+
+func TestNewCollectionNotFoundError(t *testing.T) {
+	t.Parallel()
+	err := newCollectionNotFoundError("widgets")
+	if err == nil || !strings.Contains(err.Error(), "not found") || !strings.Contains(err.Error(), "widgets") {
+		t.Fatalf("newCollectionNotFoundError(\"widgets\") = %v", err)
+	}
+}
 
 // TestIsAlreadyExists_DuplicateEntry proves the affirmative case:
 // ER_DUP_ENTRY (1062), the standard "Duplicate entry '%s' for key %d/'%s'"
 // error MySQL raises on a unique or primary-key violation, is classified as
 // a duplicate key.
 func TestIsAlreadyExists_DuplicateEntry(t *testing.T) {
+	t.Parallel()
 	err := &mysql.MySQLError{Number: erDupEntry, Message: "Duplicate entry 'id1' for key 'PRIMARY'"}
 	if !IsAlreadyExists(err) {
 		t.Errorf("IsAlreadyExists(ER_DUP_ENTRY) = false, want true")
@@ -28,6 +38,7 @@ func TestIsAlreadyExists_DuplicateEntry(t *testing.T) {
 // dalgo2mysql's classification depend on which code path inside the server
 // happened to raise the error rather than on what the error means.
 func TestIsAlreadyExists_DuplicateEntryWithKeyName(t *testing.T) {
+	t.Parallel()
 	err := &mysql.MySQLError{Number: erDupEntryWithKeyName, Message: "Duplicate entry 'id1' for key 'users.PRIMARY'"}
 	if !IsAlreadyExists(err) {
 		t.Errorf("IsAlreadyExists(ER_DUP_ENTRY_WITH_KEY_NAME) = false, want true")
@@ -39,6 +50,7 @@ func TestIsAlreadyExists_DuplicateEntryWithKeyName(t *testing.T) {
 // (ER_NO_REFERENCED_ROW_2, 1452) is a different constraint (referential
 // integrity, not uniqueness) and must NOT be reported as a duplicate key.
 func TestIsAlreadyExists_ForeignKeyViolationNotClassified(t *testing.T) {
+	t.Parallel()
 	err := &mysql.MySQLError{Number: erNoReferencedRow2, Message: "Cannot add or update a child row: a foreign key constraint fails"}
 	if IsAlreadyExists(err) {
 		t.Errorf("IsAlreadyExists(ER_NO_REFERENCED_ROW_2) = true, want false")
@@ -49,6 +61,7 @@ func TestIsAlreadyExists_ForeignKeyViolationNotClassified(t *testing.T) {
 // error shapes are all left unclassified: a generic non-MySQL error, a MySQL
 // error with an unrelated number, and nil.
 func TestIsAlreadyExists_OtherErrorsNotClassified(t *testing.T) {
+	t.Parallel()
 	cases := map[string]error{
 		"generic error":         errors.New("connection reset by peer"),
 		"unrelated MySQL error": &mysql.MySQLError{Number: 1146, Message: "Table 'db.widgets' doesn't exist"},
@@ -56,6 +69,7 @@ func TestIsAlreadyExists_OtherErrorsNotClassified(t *testing.T) {
 	}
 	for name, err := range cases {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			if IsAlreadyExists(err) {
 				t.Errorf("IsAlreadyExists(%v) = true, want false", err)
 			}
@@ -68,6 +82,7 @@ func TestIsAlreadyExists_OtherErrorsNotClassified(t *testing.T) {
 // database/sql and any intermediate wrapping in this package's own error
 // paths would produce.
 func TestIsAlreadyExists_UnwrapsWrappedError(t *testing.T) {
+	t.Parallel()
 	driverErr := &mysql.MySQLError{Number: erDupEntry, Message: "Duplicate entry 'id1' for key 'PRIMARY'"}
 	wrapped := fmt.Errorf("dalgo2mysql: exec insert: %w", driverErr)
 	if !IsAlreadyExists(wrapped) {

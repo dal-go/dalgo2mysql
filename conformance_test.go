@@ -18,6 +18,7 @@ import (
 // suite is exercised on every pull request rather than only wherever a
 // developer happened to have a DSN exported.
 func TestConformance(t *testing.T) {
+	t.Parallel()
 	tbl := uniqueTable(t, "conformance")
 	opts := dalgo2sql.DbOptions{
 		Recordsets: map[string]*dalgo2sql.Recordset{

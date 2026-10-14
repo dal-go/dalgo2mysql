@@ -70,6 +70,10 @@ func NewDatabase(dsn string) (*Database, error) {
 //	                []dal.FieldRef{dal.Field("id")}),
 //	        },
 //	    })
+var sqlOpen = func(dsn string) (*sql.DB, error) {
+	return sql.Open("mysql", dsn)
+}
+
 func NewDatabaseWithOptions(dsn string, schema dal.Schema, opts dalgo2sql.DbOptions) (*Database, error) {
 	// MySQL uses "?" positional placeholders, which is dalgo2sql's default
 	// (PlaceholderQuestion / zero value). We intentionally do NOT override
@@ -90,7 +94,7 @@ func NewDatabaseWithOptions(dsn string, schema dal.Schema, opts dalgo2sql.DbOpti
 		opts.IsAlreadyExists = IsAlreadyExists
 	}
 
-	sqlDB, err := sql.Open("mysql", dsn)
+	sqlDB, err := sqlOpen(dsn)
 	if err != nil {
 		return nil, fmt.Errorf("dalgo2mysql: sql.Open(%q): %w", dsn, err)
 	}

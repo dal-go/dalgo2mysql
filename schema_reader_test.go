@@ -2,6 +2,8 @@ package dalgo2mysql
 
 import (
 	"context"
+	"database/sql/driver"
+	"errors"
 	"strings"
 	"testing"
 
@@ -10,6 +12,7 @@ import (
 )
 
 func TestListCollections_Basic(t *testing.T) {
+	t.Parallel()
 	db := openTestDB(t)
 	ctx := context.Background()
 
@@ -45,6 +48,7 @@ func TestListCollections_Basic(t *testing.T) {
 }
 
 func TestDescribeCollection_NotFound(t *testing.T) {
+	t.Parallel()
 	db := openTestDB(t)
 	ctx := context.Background()
 	ref := dal.NewRootCollectionRef("no_such_table_xyz_123", "")
@@ -61,6 +65,7 @@ func TestDescribeCollection_NotFound(t *testing.T) {
 }
 
 func TestDescribeCollection_BasicRoundTrip(t *testing.T) {
+	t.Parallel()
 	db := openTestDB(t)
 	ctx := context.Background()
 	tbl := uniqueTable(t, "desc")
@@ -133,6 +138,7 @@ func TestDescribeCollection_BasicRoundTrip(t *testing.T) {
 }
 
 func TestListIndexes_ExcludesPK(t *testing.T) {
+	t.Parallel()
 	db := openTestDB(t)
 	ctx := context.Background()
 	tbl := uniqueTable(t, "lidx")
@@ -171,4 +177,352 @@ func TestListIndexes_ExcludesPK(t *testing.T) {
 			t.Errorf("index %q: Unique = %v, want %v", idx.Name, idx.Unique, wantUnique)
 		}
 	}
+}
+
+func TestSchemaReader_ListCollections_Unit(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	t.Run("success", func(t *testing.T) {
+		t.Parallel()
+		_, db := newMockDB(t, &driverHooks{
+			queryHook: func(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error, bool) {
+				return &mockRows{
+					cols: []string{"table_name"},
+					rows: [][]driver.Value{{"orders"}, {"users"}},
+				}, nil, true
+			},
+		})
+		got, err := db.ListCollections(ctx, nil)
+		if err != nil {
+			t.Fatalf("ListCollections: %v", err)
+		}
+		if len(got) != 2 || got[0].Name() != "orders" || got[1].Name() != "users" {
+			t.Errorf("got %+v", got)
+		}
+	})
+
+	t.Run("query_error", func(t *testing.T) {
+		t.Parallel()
+		_, db := newMockDB(t, &driverHooks{
+			queryHook: func(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error, bool) {
+				return nil, errors.New("query failed"), true
+			},
+		})
+		if _, err := db.ListCollections(ctx, nil); err == nil {
+			t.Fatal("expected error")
+		}
+	})
+
+	t.Run("scan_error", func(t *testing.T) {
+		t.Parallel()
+		_, db := newMockDB(t, &driverHooks{
+			queryHook: func(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error, bool) {
+				return &mockRows{
+					cols: []string{"table_name"},
+					rows: [][]driver.Value{{nil}},
+				}, nil, true
+			},
+		})
+		if _, err := db.ListCollections(ctx, nil); err == nil {
+			t.Fatal("expected scan error")
+		}
+	})
+}
+
+func TestSchemaReader_DescribeCollection_Unit(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	ref := dal.NewRootCollectionRef("users", "")
+
+	t.Run("success_full", func(t *testing.T) {
+		t.Parallel()
+		_, db := newMockDB(t, &driverHooks{
+			queryHook: func(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error, bool) {
+				switch {
+				case strings.Contains(query, "FROM information_schema.tables"):
+					return &mockRows{cols: []string{"table_name"}, rows: [][]driver.Value{{"users"}}}, nil, true
+				case strings.Contains(query, "FROM information_schema.table_constraints"):
+					return &mockRows{cols: []string{"column_name"}, rows: [][]driver.Value{{"id"}}}, nil, true
+				case strings.Contains(query, "FROM information_schema.columns"):
+					return &mockRows{
+						cols: []string{"column_name", "data_type", "character_maximum_length", "numeric_precision", "numeric_scale", "is_nullable"},
+						rows: [][]driver.Value{
+							{"id", "varchar", int64(64), nil, nil, "NO"},
+							{"balance", "decimal", nil, int64(10), int64(2), "YES"},
+						},
+					}, nil, true
+				case strings.Contains(query, "FROM information_schema.statistics"):
+					return &mockRows{
+						cols: []string{"index_name", "non_unique", "seq_in_index", "column_name"},
+						rows: [][]driver.Value{
+							{"ix_comp", int64(1), int64(1), "id"},
+							{"ix_comp", int64(1), int64(2), "balance"},
+						},
+					}, nil, true
+				case strings.Contains(query, "foreign_key_checks"):
+					return &mockRows{cols: []string{"checks"}, rows: [][]driver.Value{{int64(1)}}}, nil, true
+				case strings.Contains(query, "referential_constraints"):
+					return &mockRows{cols: []string{"a", "b", "c", "d", "e", "f", "g"}}, nil, true
+				}
+				return nil, nil, false
+			},
+		})
+		got, err := db.DescribeCollection(ctx, &ref)
+		if err != nil {
+			t.Fatalf("DescribeCollection: %v", err)
+		}
+		if got.Name != "users" || len(got.Fields) != 2 || len(got.PrimaryKey) != 1 || len(got.Indexes) != 1 {
+			t.Fatalf("unexpected CollectionDef: %+v", got)
+		}
+		if got.Fields[0].Length == nil || *got.Fields[0].Length != 64 {
+			t.Errorf("expected length 64, got %v", got.Fields[0].Length)
+		}
+		if got.Fields[1].Precision == nil || got.Fields[1].Precision.Total != 10 || got.Fields[1].Precision.Scale != 2 || !got.Fields[1].Nullable {
+			t.Errorf("unexpected balance field: %+v", got.Fields[1])
+		}
+		if len(got.Indexes[0].Fields) != 2 {
+			t.Errorf("expected 2 fields in composite index, got %+v", got.Indexes[0])
+		}
+	})
+
+	t.Run("not_found", func(t *testing.T) {
+		t.Parallel()
+		_, db := newMockDB(t, &driverHooks{
+			queryHook: func(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error, bool) {
+				return &mockRows{cols: []string{"table_name"}}, nil, true
+			},
+		})
+		if _, err := db.DescribeCollection(ctx, &ref); err == nil || !strings.Contains(err.Error(), "not found") {
+			t.Fatalf("expected not found error, got %v", err)
+		}
+	})
+
+	t.Run("probe_error", func(t *testing.T) {
+		t.Parallel()
+		_, db := newMockDB(t, &driverHooks{
+			queryHook: func(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error, bool) {
+				return nil, errors.New("probe boom"), true
+			},
+		})
+		if _, err := db.DescribeCollection(ctx, &ref); err == nil {
+			t.Fatal("expected error")
+		}
+	})
+
+	t.Run("pk_query_error", func(t *testing.T) {
+		t.Parallel()
+		_, db := newMockDB(t, &driverHooks{
+			queryHook: func(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error, bool) {
+				if strings.Contains(query, "FROM information_schema.tables") {
+					return &mockRows{cols: []string{"table_name"}, rows: [][]driver.Value{{"users"}}}, nil, true
+				}
+				return nil, errors.New("pk query boom"), true
+			},
+		})
+		if _, err := db.DescribeCollection(ctx, &ref); err == nil {
+			t.Fatal("expected error")
+		}
+	})
+
+	t.Run("pk_scan_error", func(t *testing.T) {
+		t.Parallel()
+		_, db := newMockDB(t, &driverHooks{
+			queryHook: func(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error, bool) {
+				if strings.Contains(query, "FROM information_schema.tables") {
+					return &mockRows{cols: []string{"table_name"}, rows: [][]driver.Value{{"users"}}}, nil, true
+				}
+				return &mockRows{cols: []string{"column_name"}, rows: [][]driver.Value{{nil}}}, nil, true
+			},
+		})
+		if _, err := db.DescribeCollection(ctx, &ref); err == nil {
+			t.Fatal("expected error")
+		}
+	})
+
+	t.Run("columns_query_error", func(t *testing.T) {
+		t.Parallel()
+		_, db := newMockDB(t, &driverHooks{
+			queryHook: func(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error, bool) {
+				switch {
+				case strings.Contains(query, "FROM information_schema.tables"):
+					return &mockRows{cols: []string{"table_name"}, rows: [][]driver.Value{{"users"}}}, nil, true
+				case strings.Contains(query, "FROM information_schema.table_constraints"):
+					return &mockRows{cols: []string{"column_name"}}, nil, true
+				default:
+					return nil, errors.New("columns boom"), true
+				}
+			},
+		})
+		if _, err := db.DescribeCollection(ctx, &ref); err == nil {
+			t.Fatal("expected error")
+		}
+	})
+
+	t.Run("columns_scan_error", func(t *testing.T) {
+		t.Parallel()
+		_, db := newMockDB(t, &driverHooks{
+			queryHook: func(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error, bool) {
+				switch {
+				case strings.Contains(query, "FROM information_schema.tables"):
+					return &mockRows{cols: []string{"table_name"}, rows: [][]driver.Value{{"users"}}}, nil, true
+				case strings.Contains(query, "FROM information_schema.table_constraints"):
+					return &mockRows{cols: []string{"column_name"}}, nil, true
+				default:
+					return &mockRows{
+						cols: []string{"a", "b", "c", "d", "e", "f"},
+						rows: [][]driver.Value{{nil, "varchar", nil, nil, nil, "YES"}},
+					}, nil, true
+				}
+			},
+		})
+		if _, err := db.DescribeCollection(ctx, &ref); err == nil {
+			t.Fatal("expected error")
+		}
+	})
+
+	t.Run("columns_unsupported_type", func(t *testing.T) {
+		t.Parallel()
+		_, db := newMockDB(t, &driverHooks{
+			queryHook: func(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error, bool) {
+				switch {
+				case strings.Contains(query, "FROM information_schema.tables"):
+					return &mockRows{cols: []string{"table_name"}, rows: [][]driver.Value{{"users"}}}, nil, true
+				case strings.Contains(query, "FROM information_schema.table_constraints"):
+					return &mockRows{cols: []string{"column_name"}}, nil, true
+				default:
+					return &mockRows{
+						cols: []string{"a", "b", "c", "d", "e", "f"},
+						rows: [][]driver.Value{{"geo", "geometry", nil, nil, nil, "YES"}},
+					}, nil, true
+				}
+			},
+		})
+		if _, err := db.DescribeCollection(ctx, &ref); err == nil {
+			t.Fatal("expected error for unsupported MySQL type")
+		}
+	})
+
+	t.Run("columns_rows_error", func(t *testing.T) {
+		t.Parallel()
+		_, db := newMockDB(t, &driverHooks{
+			queryHook: func(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error, bool) {
+				switch {
+				case strings.Contains(query, "FROM information_schema.tables"):
+					return &mockRows{cols: []string{"table_name"}, rows: [][]driver.Value{{"users"}}}, nil, true
+				case strings.Contains(query, "FROM information_schema.table_constraints"):
+					return &mockRows{cols: []string{"column_name"}}, nil, true
+				default:
+					return &mockRows{
+						cols:    []string{"a", "b", "c", "d", "e", "f"},
+						nextErr: errors.New("rows err"),
+					}, nil, true
+				}
+			},
+		})
+		if _, err := db.DescribeCollection(ctx, &ref); err == nil {
+			t.Fatal("expected error")
+		}
+	})
+
+	t.Run("indexes_error", func(t *testing.T) {
+		t.Parallel()
+		_, db := newMockDB(t, &driverHooks{
+			queryHook: func(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error, bool) {
+				switch {
+				case strings.Contains(query, "FROM information_schema.tables"):
+					return &mockRows{cols: []string{"table_name"}, rows: [][]driver.Value{{"users"}}}, nil, true
+				case strings.Contains(query, "FROM information_schema.table_constraints"):
+					return &mockRows{cols: []string{"column_name"}}, nil, true
+				case strings.Contains(query, "FROM information_schema.columns"):
+					return &mockRows{cols: []string{"a", "b", "c", "d", "e", "f"}}, nil, true
+				default:
+					return nil, errors.New("indexes boom"), true
+				}
+			},
+		})
+		if _, err := db.DescribeCollection(ctx, &ref); err == nil {
+			t.Fatal("expected error")
+		}
+	})
+
+	t.Run("foreign_keys_error", func(t *testing.T) {
+		t.Parallel()
+		_, db := newMockDB(t, &driverHooks{
+			queryHook: func(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error, bool) {
+				switch {
+				case strings.Contains(query, "FROM information_schema.tables"):
+					return &mockRows{cols: []string{"table_name"}, rows: [][]driver.Value{{"users"}}}, nil, true
+				case strings.Contains(query, "FROM information_schema.table_constraints"):
+					return &mockRows{cols: []string{"column_name"}}, nil, true
+				case strings.Contains(query, "FROM information_schema.columns"):
+					return &mockRows{cols: []string{"a", "b", "c", "d", "e", "f"}}, nil, true
+				case strings.Contains(query, "FROM information_schema.statistics"):
+					return &mockRows{cols: []string{"a", "b", "c", "d"}}, nil, true
+				default:
+					return nil, errors.New("fk boom"), true
+				}
+			},
+		})
+		if _, err := db.DescribeCollection(ctx, &ref); err == nil {
+			t.Fatal("expected error")
+		}
+	})
+}
+
+func TestSchemaReader_ListIndexes_Unit(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	ref := dal.NewRootCollectionRef("users", "")
+
+	t.Run("success", func(t *testing.T) {
+		t.Parallel()
+		_, db := newMockDB(t, &driverHooks{
+			queryHook: func(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error, bool) {
+				return &mockRows{
+					cols: []string{"index_name", "non_unique", "seq_in_index", "column_name"},
+					rows: [][]driver.Value{
+						{"uq_email", int64(0), int64(1), "email"},
+					},
+				}, nil, true
+			},
+		})
+		got, err := db.ListIndexes(ctx, &ref)
+		if err != nil {
+			t.Fatalf("ListIndexes: %v", err)
+		}
+		if len(got) != 1 || !got[0].Unique || got[0].Name != "uq_email" {
+			t.Errorf("got %+v", got)
+		}
+	})
+
+	t.Run("scan_error", func(t *testing.T) {
+		t.Parallel()
+		_, db := newMockDB(t, &driverHooks{
+			queryHook: func(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error, bool) {
+				return &mockRows{
+					cols: []string{"index_name", "non_unique", "seq_in_index", "column_name"},
+					rows: [][]driver.Value{{nil, int64(0), int64(1), "email"}},
+				}, nil, true
+			},
+		})
+		if _, err := db.ListIndexes(ctx, &ref); err == nil {
+			t.Fatal("expected scan error")
+		}
+	})
+
+	t.Run("rows_error", func(t *testing.T) {
+		t.Parallel()
+		_, db := newMockDB(t, &driverHooks{
+			queryHook: func(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error, bool) {
+				return &mockRows{
+					cols:    []string{"index_name", "non_unique", "seq_in_index", "column_name"},
+					nextErr: errors.New("rows err"),
+				}, nil, true
+			},
+		})
+		if _, err := db.ListIndexes(ctx, &ref); err == nil {
+			t.Fatal("expected rows error")
+		}
+	})
 }
