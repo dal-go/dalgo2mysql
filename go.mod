@@ -5,7 +5,7 @@ go 1.26.0
 toolchain go1.27.3
 
 require (
-	github.com/dal-go/dalgo v0.95.4
+	github.com/dal-go/dalgo v0.96.2
 	github.com/dal-go/dalgo2sql v0.30.4
 	github.com/dal-go/record v0.1.5
 	github.com/go-sql-driver/mysql v1.10.1
