@@ -5,8 +5,8 @@ go 1.26.0
 toolchain go1.27.3
 
 require (
-	github.com/dal-go/dalgo v0.97.1
-	github.com/dal-go/dalgo2sql v0.30.4
+	github.com/dal-go/dalgo v0.99.0
+	github.com/dal-go/dalgo2sql v0.32.2
 	github.com/dal-go/record v0.1.5
 	github.com/go-sql-driver/mysql v1.10.1
 )
@@ -28,5 +28,5 @@ require (
 	modernc.org/libc v1.79.0 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.12.1 // indirect
-	modernc.org/sqlite v1.61.0 // indirect
+	modernc.org/sqlite v1.61.1 // indirect
 )
