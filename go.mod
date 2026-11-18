@@ -8,7 +8,7 @@ require (
 	github.com/dal-go/dalgo v0.102.5
 	github.com/dal-go/dalgo2sql v0.32.5
 	github.com/dal-go/record v0.1.5
-	github.com/go-sql-driver/mysql v1.10.1
+	github.com/go-sql-driver/mysql v1.10.2
 )
 
 require (
